@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+//import "google/protobuf/wrappers.proto";
+
+option csharp_namespace = "GarageDoorOpener.Shared.Protos";
+
+service GarageDoor{
+	rpc SignalDoor (SignalDoorRequest) returns (SignalDoorReply);
+}
+
+message SignalDoorRequest{
+	string authenticationCode = 1;
+	oneof signalDoor{
+		SignalLeftDoor openLeftDoor = 2;
+		SignalRightDoor openRightDoor = 3;
+	}
+	
+}
+
+message SignalLeftDoor{
+
+}
+
+message SignalRightDoor{
+
+}
+
+message SignalDoorReply{
+}

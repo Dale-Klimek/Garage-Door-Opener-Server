@@ -1,0 +1,171 @@
+# Docker
+# Build a Docker image
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+name: $(majorVersion).$(minorVersion).$(semanticVersion)
+
+trigger:
+  branches:
+    include:
+      - '*'
+# - main
+
+resources:
+- repo: self
+
+variables:
+  tag: '$(Build.BuildId)'
+  majorVersion: 1
+  minorVersion: 0
+  majorMinorVersion: $[format('{0}.{1}', variables['majorVersion'], variables['minorVersion'])]
+  semanticVersion: $[counter(variables['majorMinorVersion'], 0)]
+
+stages:
+- stage: Build
+  displayName: Build image
+  jobs:
+
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+
+    - task: AzureKeyVault@2
+      inputs:
+        azureSubscription: 'Azure subscription 1(5a909349-cac1-4dda-aea2-e32e43df778c)'
+        KeyVaultName: 'Klimek-KeyVault'
+        SecretsFilter: '*'
+        RunAsPreJob: false
+        
+    # - task: Docker@2
+    #   displayName: Build an image
+    #   inputs:
+    #     command: build
+    #     buildContext: $(Build.SourcesDirectory)/GarageDoorOpener.Server
+    #     dockerfile: '$(Build.SourcesDirectory)/GarageDoorOpener.Server/GarageDoorOpener.Server/Dockerfile'
+    #     tags: |
+    #       $(tag)
+
+
+    - task: Docker@2
+      displayName: Docker Login
+      inputs:
+        command: 'login'
+        containerRegistry: 'DockerRegistry'
+        
+
+    - task: PowerShell@2
+      displayName: Install Emulators
+      inputs:
+        targetType: 'inline'
+        script: 'docker run --privileged --rm tonistiigi/binfmt --install arm64,arm,arm/v7'
+    
+    - task: PowerShell@2
+      displayName: Create Docker Profile
+      inputs:
+        targetType: 'inline'
+        script: |
+          docker buildx ls
+          docker buildx create --use
+          docker buildx ls          
+
+    - task: PowerShell@2
+      displayName: Run Buildx
+      inputs:
+        targetType: 'inline'
+        workingDirectory: $(Build.SourcesDirectory)/GarageDoorOpener.Server
+        script: |
+          echo $(Build.SourcesDirectory)/GarageDoorOpener.Server
+          docker buildx build `
+          --build-arg password=$(Self-Signed-Certificate-Password) `
+          -t lexieregistry.azurecr.io/garage-door-opener-server `
+          -t lexieregistry.azurecr.io/garage-door-opener-server:$(build.buildNumber) `
+          -f GarageDoorOpener.Server/Dockerfile --push --platform linux/amd64,linux/arm64,linux/arm/v7 .
+
+    - task: Docker@2
+      displayName: Docker Logout
+      inputs:
+        containerRegistry: 'DockerRegistry'
+        command: 'logout'
+
+  - job: Build_And_Pack
+    displayName: Build & Pack Nuget
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    variables:
+      buildConfiguration: 'Release'
+      projectDirectory: 'GarageDoorOpener.Server/GarageDoorOpener.Client'
+      projectFile: 'GarageDoorOpener.Server/GarageDoorOpener.Client/GarageDoorOpener.Client.csproj'
+      dependentProject: 'GarageDoorOpener.Server/GarageDoorOpener.Shared/GarageDoorOpener.Shared.csproj'
+      buildPlatform: 'Any CPU'
+
+    steps:
+    - script: |
+        echo 'ProjectFile = $(projectFile)'
+        echo 'SemanticVersion = $(semanticVersion)'
+        echo 'MajorMinorVersion = $(majorMinorVersion)'
+      displayName: Display Variables
+    
+    # for help with restore --> https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-restore
+    - task: DotNetCoreCLI@2
+      displayName: Restore
+      inputs:
+        command: 'restore'
+        projects: '$(projectFile)'
+        feedsToUse: select
+        vstsFeed: '96d4c6ff-9d54-418d-b5dc-c15eb1877745'
+        noCache: false
+
+    # for help with build --> https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-build
+    - task: DotNetCoreCLI@2
+      displayName: Build
+      inputs:
+        command: 'build'
+        projects: '$(projectFile)'
+        arguments: '--no-restore --configuration $(BuildConfiguration)'
+
+    # for help with pack --> https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-pack
+    # - task: DotNetCoreCLI@2
+    #   displayName: Pack
+    #   inputs:
+    #     command: 'pack'
+    #     packagesToPack: '$(dependentProject)'
+    #     nobuild: true
+    #     versioningScheme: 'byPrereleaseNumber'
+    #     majorVersion: '1'
+    #     minorVersion: '0'
+    #     patchVersion: '0'
+
+    - task: DotNetCoreCLI@2
+      displayName: Pack
+      inputs:
+        command: 'pack'
+        packagesToPack: '**/*.csproj'
+        nobuild: true
+        versioningScheme: byBuildNumber
+        # versioningScheme: 'byPrereleaseNumber'
+        # majorVersion: '1'
+        # minorVersion: '0'
+        # patchVersion: '0'
+    # for help with pack --> https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-pack
+    # - task: DotNetCoreCLI@2
+    #   displayName: Pack
+    #   inputs:
+    #     command: 'pack'
+    #     packagesToPack: '$(projectFile)'
+    #     nobuild: true
+    #     versioningScheme: 'byPrereleaseNumber'
+    #     majorVersion: '1'
+    #     minorVersion: '0'
+    #     patchVersion: '0'
+
+    # for help with publish --> https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/utility/publish-build-artifacts?view=azure-devops
+    - task: PublishBuildArtifacts@1
+      displayName: Publish
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
